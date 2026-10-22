@@ -45,7 +45,19 @@ class QuestionModelTests(TestCase):
         recent_question = Question(pub_date=time)
         self.assertIs(recent_question.was_published_recently(), True)
 
+    def test_future_question_is_not_recent(self):
+        future_question = create_question(question_text="Future question.", days=30)
+        self.assertIs(future_question.was_published_recently(), False)
+        response = self.client.get(reverse('polls:index'))
+        self.assertNotContains(response, future_question.question_text)
+        self.assertQuerysetEqual(response.context['latest_question_list'], [])
+
 class QuestionIndexViewTests(TestCase):
+    def test_empty_index(self):
+        response = self.client.get(reverse('polls:index'))
+        self.assertEqual(response.status_code, 200)
+        self.assertQuerysetEqual(response.context['latest_question_list'], [])
+
     def test_no_questions(self):
         """
         If no questions exist, an appropriate message is displayed.
@@ -122,3 +134,54 @@ class QuestionDetailViewTests(TestCase):
         url = reverse('polls:detail', args=(past_question.id,))
         response = self.client.get(url)
         self.assertContains(response, past_question.question_text)
+
+
+class QuestionVoteTests(TestCase):
+    def test_vote_increments_selected_choice(self):
+        question = create_question(question_text="Past question.", days=-5)
+        selected_choice = question.choice_set.create(choice_text="Choice 1")
+        other_choice = question.choice_set.create(choice_text="Choice 2")
+        url = reverse('polls:vote', args=(question.id,))
+        response = self.client.post(url, {'choice': selected_choice.id})
+        self.assertRedirects(response, reverse('polls:results', args=(question.id,)))
+        selected_choice.refresh_from_db()
+        other_choice.refresh_from_db()
+        self.assertEqual(selected_choice.votes, 1)
+        self.assertEqual(other_choice.votes, 0)
+
+    def test_vote_with_missing_choice_does_not_increment(self):
+        question = create_question(question_text="Past question.", days=-5)
+        choice1 = question.choice_set.create(choice_text="Choice 1")
+        choice2 = question.choice_set.create(choice_text="Choice 2")
+        url = reverse('polls:vote', args=(question.id,))
+        response = self.client.post(url, {})
+        self.assertContains(response, "You didn&#x27;t select a choice.")
+        choice1.refresh_from_db()
+        choice2.refresh_from_db()
+        self.assertEqual(choice1.votes, 0)
+        self.assertEqual(choice2.votes, 0)
+
+    def test_vote_with_nonexistent_choice_does_not_increment(self):
+        question = create_question(question_text="Past question.", days=-5)
+        choice1 = question.choice_set.create(choice_text="Choice 1")
+        choice2 = question.choice_set.create(choice_text="Choice 2")
+        url = reverse('polls:vote', args=(question.id,))
+        response = self.client.post(url, {'choice': 9999})
+        self.assertContains(response, "You didn&#x27;t select a choice.")
+        choice1.refresh_from_db()
+        choice2.refresh_from_db()
+        self.assertEqual(choice1.votes, 0)
+        self.assertEqual(choice2.votes, 0)
+
+    def test_vote_with_other_questions_choice_does_not_increment(self):
+        question = create_question(question_text="Past question 1.", days=-5)
+        other_question = create_question(question_text="Past question 2.", days=-5)
+        choice = question.choice_set.create(choice_text="Choice 1")
+        other_choice = other_question.choice_set.create(choice_text="Choice 2")
+        url = reverse('polls:vote', args=(question.id,))
+        response = self.client.post(url, {'choice': other_choice.id})
+        self.assertContains(response, "You didn&#x27;t select a choice.")
+        choice.refresh_from_db()
+        other_choice.refresh_from_db()
+        self.assertEqual(choice.votes, 0)
+        self.assertEqual(other_choice.votes, 0)
